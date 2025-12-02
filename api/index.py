@@ -1,83 +1,57 @@
 from flask import Flask, request, redirect
 import os
 import requests
-import io # মেমোরিতে ফাইল বানানোর জন্য
+import random
+import string
 
 app = Flask(__name__)
 
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-# --- অটোমেটিক ইউজারনেম (রিডাইরেক্টের জন্য) ---
-BOT_USERNAME = None
+# --- অটো রিডাইরেক্টের জন্য ---
 def get_bot_username():
-    global BOT_USERNAME
-    if BOT_USERNAME: return BOT_USERNAME
     try:
         response = requests.get(f"{BASE_URL}/getMe")
-        data = response.json()
-        if data["ok"]:
-            BOT_USERNAME = data["result"]["username"]
-            return BOT_USERNAME
+        return response.json()["result"]["username"]
+    except:
+        return "Telegram"
+
+# --- জিমেইল এবং পাসওয়ার্ড জেনারেটর ---
+def generate_credentials():
+    # ১. ভাওয়েল এবং কনসোন্যান্ট দিয়ে মানুষের মতো নাম তৈরি করা (উচ্চারণযোগ্য)
+    vowels = "aeiou"
+    consonants = "bcdfghjklmnpqrstvwxyz"
+    
+    # ৬-৭ অক্ষরের নাম তৈরি
+    name = ""
+    for i in range(3):
+        name += random.choice(consonants)
+        name += random.choice(vowels)
+    
+    # শেষে ৩-৪ ডিজিটের সংখ্যা যোগ করা (যাতে ইউনিক হয়)
+    numbers = ''.join(random.choices(string.digits, k=4))
+    
+    email = f"{name}{numbers}@gmail.com"
+    
+    # ২. শক্তিশালী পাসওয়ার্ড তৈরি (Upper + Lower + Digit)
+    chars = string.ascii_letters + string.digits
+    password = ''.join(random.choices(chars, k=10))
+    
+    return email, password
+
+# --- মেসেজ পাঠানো ---
+def send_message(chat_id, text, buttons=None):
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML", 
+        "disable_web_page_preview": True
+    }
+    if buttons: payload["reply_markup"] = buttons
+    try: requests.post(f"{BASE_URL}/sendMessage", json=payload)
     except: pass
-    return "Telegram"
 
-# --- 1. Dot Trick Generator (Logic) ---
-def generate_dot_aliases(email):
-    username, domain = email.split('@')
-    if domain != 'gmail.com': return None
-    
-    emails = set()
-    username_length = len(username)
-    
-    # বাইনারি লজিক ব্যবহার করে ডট কম্বিনেশন তৈরি
-    # (খুব বড় ইউজারনেম হলে Vercel এ টাইমআউট হতে পারে, তাই লিমিট ১০২৪ রাখা হলো)
-    limit = 2**(username_length - 1)
-    if limit > 2000: limit = 2000 # সেফটি লিমিট
-    
-    for i in range(limit):
-        new_user = ""
-        for j in range(username_length):
-            new_user += username[j]
-            # বিট চেক করে ডট বসানো
-            if (i >> j) & 1:
-                new_user += "."
-        
-        # শেষের ডট বা ডাবল ডট ক্লিন করা
-        clean_user = new_user.strip('.')
-        emails.add(f"{clean_user}@{domain}")
-    
-    return list(emails)
-
-# --- 2. Plus Trick Generator (Logic) ---
-def generate_plus_aliases(email, count=100):
-    username, domain = email.split('@')
-    emails = []
-    for i in range(1, int(count) + 1):
-        emails.append(f"{username}+id{i}@{domain}")
-    return emails
-
-# --- মেসেজ বা ফাইল পাঠানোর ফাংশন ---
-def send_message(chat_id, text):
-    requests.post(f"{BASE_URL}/sendMessage", json={
-        "chat_id": chat_id, "text": text, "parse_mode": "HTML"
-    })
-
-def send_file(chat_id, file_content, filename, caption):
-    # মেমোরিতে ফাইল তৈরি (সার্ভারে সেভ না করে)
-    file_obj = io.BytesIO(file_content.encode('utf-8'))
-    file_obj.name = filename
-    
-    url = f"{BASE_URL}/sendDocument"
-    data = {"chat_id": chat_id, "caption": caption}
-    files = {"document": file_obj}
-    
-    try:
-        requests.post(url, data=data, files=files)
-    except Exception as e:
-        print(e)
-
-# --- routes ---
 @app.route('/')
 def home():
     return redirect(f"https://t.me/{get_bot_username()}")
@@ -86,58 +60,62 @@ def home():
 def webhook():
     try:
         data = request.get_json(force=True)
-        if "message" in data:
+        
+        # --- BUTTON CLICK ---
+        if "callback_query" in data:
+            call = data["callback_query"]
+            chat_id = call["message"]["chat"]["id"]
+            
+            if call["data"] == "gen_gmail":
+                email, password = generate_credentials()
+                
+                response = (
+                    "✅ <b>Gmail Suggestion Generated!</b>\n\n"
+                    f"📧 <b>Email:</b> <code>{email}</code>\n"
+                    f"🔑 <b>Password:</b> <code>{password}</code>\n\n"
+                    "⚠️ <i>এটি শুধু একটি সাজেশন। আপনি এই তথ্য দিয়ে সাইন-আপ করার চেষ্টা করুন।</i>"
+                )
+                
+                buttons = {
+                    "inline_keyboard": [
+                        [{"text": "📝 Create Account Now", "url": "https://accounts.google.com/signup"}],
+                        [{"text": "🔄 Generate Another", "callback_data": "gen_gmail"}]
+                    ]
+                }
+                
+                # আগের মেসেজ এডিট না করে নতুন মেসেজ পাঠানো (যাতে আগেরগুলো সেভ থাকে)
+                send_message(chat_id, response, buttons)
+            
+            # লোডিং আইকন বন্ধ করা
+            requests.post(f"{BASE_URL}/answerCallbackQuery", json={"callback_query_id": call["id"]})
+
+        # --- TEXT MESSAGE ---
+        elif "message" in data:
             msg = data["message"]
             chat_id = msg["chat"]["id"]
-            text = msg.get("text", "").strip()
+            text = msg.get("text", "")
 
-            # --- START COMMAND ---
             if text == "/start":
-                welcome = (
-                    "👋 <b>Gmail Generator Bot-এ স্বাগতম!</b>\n\n"
-                    "আমি আপনার একটি জিমেইল থেকে হাজার হাজার ভেলিড জিমেইল বানিয়ে দিতে পারি।\n\n"
-                    "⚙️ <b>কমান্ডসমূহ:</b>\n"
-                    "১. <b>Dot Trick:</b> <code>/dot yourname@gmail.com</code>\n"
-                    "২. <b>Plus Trick:</b> <code>/plus yourname@gmail.com</code>\n\n"
-                    "ℹ️ <i>এই জিমেইলগুলো দিয়ে আপনি যেকোনো সাইটে বারবার অ্যাকাউন্ট খুলতে পারবেন।</i>"
+                email, password = generate_credentials()
+                
+                response = (
+                    "🤖 <b>Gmail ID Generator Bot</b>\n\n"
+                    "আমি ইউনিক জিমেইল আইডি এবং পাসওয়ার্ড সাজেস্ট করি যা সাধারণত খালি (Available) থাকে।\n\n"
+                    f"📧 <b>Email:</b> <code>{email}</code>\n"
+                    f"🔑 <b>Password:</b> <code>{password}</code>"
                 )
-                send_message(chat_id, welcome)
-
-            # --- DOT TRICK ---
-            elif text.startswith("/dot"):
-                try:
-                    email = text.split(" ")[1]
-                    if "@gmail.com" not in email:
-                        send_message(chat_id, "⚠️ দয়া করে একটি ভেলিড <b>@gmail.com</b> অ্যাড্রেস দিন।")
-                    else:
-                        send_message(chat_id, "⏳ জেনারেট হচ্ছে... একটু অপেক্ষা করুন।")
-                        aliases = generate_dot_aliases(email)
-                        
-                        if aliases:
-                            file_text = "\n".join(aliases)
-                            caption = f"✅ <b>{len(aliases)}</b> টি জিমেইল তৈরি হয়েছে!"
-                            send_file(chat_id, file_text, "dot_emails.txt", caption)
-                        else:
-                            send_message(chat_id, "⚠️ এরর হয়েছে। নাম খুব ছোট হলে ডট ট্রিক কাজ করে না।")
-                except:
-                    send_message(chat_id, "ভুল ফরম্যাট! লিখুন: <code>/dot user@gmail.com</code>")
-
-            # --- PLUS TRICK ---
-            elif text.startswith("/plus"):
-                try:
-                    email = text.split(" ")[1]
-                    # ডিফল্ট ১০০টি বানাবে
-                    aliases = generate_plus_aliases(email, 100) 
-                    
-                    file_text = "\n".join(aliases)
-                    caption = "✅ <b>১০০টি Plus Alias</b> তৈরি হয়েছে!"
-                    send_file(chat_id, file_text, "plus_emails.txt", caption)
-                except:
-                    send_message(chat_id, "ভুল ফরম্যাট! লিখুন: <code>/plus user@gmail.com</code>")
-
-            else:
-                send_message(chat_id, "দয়া করে <b>/start</b> চাপুন নিয়ম জানার জন্য।")
+                
+                buttons = {
+                    "inline_keyboard": [
+                        [{"text": "📝 Create Account Now", "url": "https://accounts.google.com/signup"}],
+                        [{"text": "🔄 Generate Another", "callback_data": "gen_gmail"}]
+                    ]
+                }
+                send_message(chat_id, response, buttons)
 
         return "ok", 200
-    except:
+
+    except Exception as e:
+        print(f"Error: {e}")
         return "error", 200
+        
