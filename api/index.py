@@ -1,167 +1,141 @@
 from flask import Flask, request, redirect
 import os
 import requests
-import random
-import string
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 import json
-import re
 
 app = Flask(__name__)
 
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
-SHEET_NAME = os.environ.get('SHEET_NAME')
-GOOGLE_CREDENTIALS = os.environ.get('GOOGLE_CREDENTIALS')
 
-# --- Google Sheets কানেকশন ফাংশন ---
-def save_to_sheet(email, password):
-    try:
-        if not GOOGLE_CREDENTIALS or not SHEET_NAME:
-            return False, "⚠️ Credentials or Sheet Name missing in Vercel."
+# --- ১. মেনু বাটন ডিজাইন (JSON Format) ---
 
-        # JSON ক্রেডেনশিয়াল লোড করা
-        creds_dict = json.loads(GOOGLE_CREDENTIALS)
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-        client = gspread.authorize(creds)
+# মেইন মেনু (Main Menu)
+main_menu = {
+    "keyboard": [
+        [{"text": "🛠 Generator Tool"}, {"text": "Cc PDF Tool"}],
+        [{"text": "🗣 Voice Tool"}, {"text": "🖼 Image Tool"}],
+        [{"text": "📝 Text Tool"}, {"text": "📂 File Info"}]
+    ],
+    "resize_keyboard": True,
+    "one_time_keyboard": False
+}
+
+# জেনারেটর সাব-মেনু
+gen_menu = {
+    "keyboard": [
+        [{"text": "🟦 QR Code"}, {"text": "asd Password Gen"}],
+        [{"text": "🔗 Link Shortener"}, {"text": "🔙 Back"}]
+    ],
+    "resize_keyboard": True
+}
+
+# পিডিএফ সাব-মেনু
+pdf_menu = {
+    "keyboard": [
+        [{"text": "🖼 Img to PDF"}, {"text": "📄 Text to PDF"}],
+        [{"text": "🖇 Merge PDF"}, {"text": "🔙 Back"}]
+    ],
+    "resize_keyboard": True
+}
+
+# ভয়েস সাব-মেনু
+voice_menu = {
+    "keyboard": [
+        [{"text": "🗣 Text to Voice"}, {"text": "🎤 Voice to Text"}],
+        [{"text": "🔙 Back"}]
+    ],
+    "resize_keyboard": True
+}
+
+# ইমেজ সাব-মেনু
+image_menu = {
+    "keyboard": [
+        [{"text": "✂️ Remove BG"}, {"text": "📐 Resize"}],
+        [{"text": "🔙 Back"}]
+    ],
+    "resize_keyboard": True
+}
+
+# টেক্সট সাব-মেনু
+text_menu = {
+    "keyboard": [
+        [{"text": "🔐 Base64 Encode"}, {"text": "#️⃣ Hash Gen"}],
+        [{"text": "🔠 Case Converter"}, {"text": "🔙 Back"}]
+    ],
+    "resize_keyboard": True
+}
+
+# --- মেসেজ পাঠানোর ফাংশন ---
+def send_message(chat_id, text, reply_markup=None):
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML"
+    }
+    # যদি বাটন থাকে তবে যোগ করবে
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
         
-        # শিট ওপেন করা এবং ডাটা অ্যাপেন্ড করা
-        sheet = client.open(SHEET_NAME).sheet1
-        sheet.append_row([email, password])
-        return True, "✅ Saved to Google Sheet!"
-    except Exception as e:
-        print(f"Sheet Error: {e}")
-        return False, f"❌ Error saving: {str(e)}"
-
-# --- অটো রিডাইরেক্ট ---
-def get_bot_username():
     try:
-        response = requests.get(f"{BASE_URL}/getMe")
-        return response.json()["result"]["username"]
-    except:
-        return "Telegram"
-
-# --- জিমেইল জেনারেটর ---
-def generate_credentials():
-    vowels = "aeiou"
-    consonants = "bcdfghjklmnpqrstvwxyz"
-    name = ""
-    for i in range(3):
-        name += random.choice(consonants)
-        name += random.choice(vowels)
-    numbers = ''.join(random.choices(string.digits, k=4))
-    email = f"{name}{numbers}@gmail.com"
-    chars = string.ascii_letters + string.digits
-    password = ''.join(random.choices(chars, k=10))
-    return email, password
-
-# --- মেসেজ পাঠানো ---
-def send_message(chat_id, text, buttons=None):
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
-    if buttons: payload["reply_markup"] = buttons
-    try: requests.post(f"{BASE_URL}/sendMessage", json=payload)
-    except: pass
+        requests.post(f"{BASE_URL}/sendMessage", json=payload)
+    except Exception as e:
+        print(f"Error: {e}")
 
 @app.route('/')
 def home():
-    return redirect(f"https://t.me/{get_bot_username()}")
+    return "Menu Bot is Running! 🤖"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
         data = request.get_json(force=True)
         
-        # --- BUTTON CLICK HANDLING ---
-        if "callback_query" in data:
-            call = data["callback_query"]
-            chat_id = call["message"]["chat"]["id"]
-            msg_id = call["message"]["message_id"]
-            action = call["data"]
-            
-            # আগের মেসেজ থেকে ইমেইল ও পাসওয়ার্ড বের করা (Regex দিয়ে)
-            original_text = call["message"].get("text", "")
-            email_match = re.search(r"Email:\s*([^\n]+)", original_text)
-            pass_match = re.search(r"Password:\s*([^\n]+)", original_text)
-            
-            email = email_match.group(1).strip() if email_match else None
-            password = pass_match.group(1).strip() if pass_match else None
-
-            # 1. GENERATE NEW
-            if action == "gen_gmail":
-                new_email, new_password = generate_credentials()
-                response = (
-                    "🤖 <b>Gmail Generator</b>\n\n"
-                    f"📧 <b>Email:</b> <code>{new_email}</code>\n"
-                    f"🔑 <b>Password:</b> <code>{new_password}</code>\n\n"
-                    "সেভ করতে চাইলে <b>Done</b> চাপুন।"
-                )
-                buttons = {
-                    "inline_keyboard": [
-                        [{"text": "✅ Done (Save)", "callback_data": "save_sheet"}, {"text": "❌ Cancel", "callback_data": "cancel"}],
-                        [{"text": "🔄 Generate Another", "callback_data": "gen_gmail"}]
-                    ]
-                }
-                # এডিট না করে নতুন মেসেজ পাঠানো (যাতে আগেরগুলো হিস্টোরি থাকে)
-                send_message(chat_id, response, buttons)
-
-            # 2. SAVE TO SHEET (DONE)
-            elif action == "save_sheet":
-                if email and password:
-                    # লোডিং মেসেজ (Toast)
-                    requests.post(f"{BASE_URL}/answerCallbackQuery", json={"callback_query_id": call["id"], "text": "Saving...", "show_alert": False})
-                    
-                    # শিটে সেভ করা
-                    success, msg = save_to_sheet(email, password)
-                    
-                    if success:
-                        new_text = original_text + "\n\n✅ <b>Saved to Sheet!</b>"
-                        # বাটন সরিয়ে দেওয়া (যাতে দুইবার সেভ না হয়)
-                        requests.post(f"{BASE_URL}/editMessageText", json={
-                            "chat_id": chat_id, "message_id": msg_id, "text": new_text, "parse_mode": "HTML"
-                        })
-                    else:
-                         requests.post(f"{BASE_URL}/answerCallbackQuery", json={"callback_query_id": call["id"], "text": msg, "show_alert": True})
-                else:
-                    requests.post(f"{BASE_URL}/answerCallbackQuery", json={"callback_query_id": call["id"], "text": "❌ ডাটা পাওয়া যায়নি!", "show_alert": True})
-
-            # 3. CANCEL
-            elif action == "cancel":
-                # মেসেজ ডিলিট করে দেওয়া বা ক্যানসেল লেখা
-                requests.post(f"{BASE_URL}/deleteMessage", json={"chat_id": chat_id, "message_id": msg_id})
-                requests.post(f"{BASE_URL}/answerCallbackQuery", json={"callback_query_id": call["id"], "text": "Cancelled"})
-
-            else:
-                requests.post(f"{BASE_URL}/answerCallbackQuery", json={"callback_query_id": call["id"]})
-
-        # --- TEXT MESSAGE ---
-        elif "message" in data:
+        if "message" in data and "text" in data["message"]:
             msg = data["message"]
             chat_id = msg["chat"]["id"]
-            text = msg.get("text", "")
+            text = msg["text"]
+            
+            # --- ১. মেইন মেনু লজিক ---
+            if text == "/start" or text == "🔙 Back":
+                send_message(chat_id, "👋 <b>Main Menu</b>\nনিচ থেকে একটি টুল সিলেক্ট করুন:", main_menu)
 
-            if text == "/start":
-                email, password = generate_credentials()
+            # --- ২. সাব-মেনু ওপেন করার লজিক ---
+            
+            elif text == "🛠 Generator Tool":
+                send_message(chat_id, "🛠 <b>Generator Tools</b>\nকি জেনারেট করতে চান?", gen_menu)
                 
-                response = (
-                    "🤖 <b>Gmail Generator</b>\n\n"
-                    f"📧 <b>Email:</b> <code>{email}</code>\n"
-                    f"🔑 <b>Password:</b> <code>{password}</code>\n\n"
-                    "সেভ করতে চাইলে <b>Done</b> চাপুন।"
-                )
+            elif text == "Cc PDF Tool":
+                send_message(chat_id, "Cc <b>PDF Tools</b>\nএকটি অপশন বেছে নিন:", pdf_menu)
                 
-                buttons = {
-                    "inline_keyboard": [
-                        [{"text": "✅ Done (Save)", "callback_data": "save_sheet"}, {"text": "❌ Cancel", "callback_data": "cancel"}],
-                        [{"text": "🔄 Generate Another", "callback_data": "gen_gmail"}]
-                    ]
-                }
-                send_message(chat_id, response, buttons)
+            elif text == "🗣 Voice Tool":
+                send_message(chat_id, "🗣 <b>Voice Tools</b>\nঅপশন সিলেক্ট করুন:", voice_menu)
+                
+            elif text == "🖼 Image Tool":
+                send_message(chat_id, "🖼 <b>Image Tools</b>\nকি করতে চান?", image_menu)
+                
+            elif text == "📝 Text Tool":
+                send_message(chat_id, "📝 <b>Text Tools</b>\nটেক্সট টুলস ওপেন হয়েছে:", text_menu)
+                
+            elif text == "📂 File Info":
+                # ফাইল ইনফো সাব-মেনু নেই, এটি সরাসরি কাজ করবে
+                send_message(chat_id, "📂 যেকোনো ফাইল বা ছবি পাঠান, আমি ইনফো দেব।\n(ফিরে যেতে <b>Back</b> চাপুন)", main_menu)
+
+            # --- ৩. টুলের কাজ (উদাহরণ: QR Code) ---
+            elif text == "🟦 QR Code":
+                send_message(chat_id, "অনুগ্রহ করে টেক্সট বা লিংক পাঠান, আমি QR Code বানিয়ে দেব।")
+                # এখানে QR কোড তৈরির লজিক বসাতে হবে (আগের কোড অনুযায়ী)
+            
+            elif text == "asd Password Gen":
+                send_message(chat_id, "আপনার পাসওয়ার্ড: <code>XyZ123!@</code>")
+
+            # --- ৪. ডিফল্ট মেসেজ ---
+            else:
+                # যদি ইউজার টুল সিলেক্ট করা ছাড়াই কিছু লেখে
+                send_message(chat_id, "⚠️ দয়া করে নিচের বাটনগুলো ব্যবহার করুন।", main_menu)
 
         return "ok", 200
 
     except Exception as e:
         print(f"Error: {e}")
         return "error", 200
-            
