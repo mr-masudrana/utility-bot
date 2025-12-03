@@ -1,4 +1,5 @@
 Flask
 requests
-gspread
-oauth2client
+qrcode
+Pillow
+gTTS
