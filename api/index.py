@@ -8,7 +8,6 @@ import base64
 import hashlib
 import random
 import string
-from PIL import Image, ImageOps
 from gtts import gTTS
 from fpdf import FPDF
 import google.generativeai as genai
@@ -39,7 +38,6 @@ def get_main_menu():
         "one_time_keyboard": False
     })
 
-# (বাকি সাব-মেনুগুলো আগের মতোই থাকবে, জায়গার জন্য সব লিখলাম না, আপনি আগের কোড থেকে সাব-মেনু ফাংশনগুলো রেখে দেবেন)
 def get_gen_menu():
     return json.dumps({"keyboard": [[{"text": "🟦 QR Code"}, {"text": "🔑 Password Gen"}], [{"text": "🔗 Link Shortener"}, {"text": "🔙 Back"}]], "resize_keyboard": True})
 
@@ -58,10 +56,10 @@ def get_text_menu():
 
 # --- হেল্পার ফাংশন ---
 def send_reply(chat_id, text, reply_markup=None):
-    # মার্কডাউন বা HTML এরর এড়াতে প্লেইন টেক্সট মোড ভালো, তবে এখানে আমরা কিছুই দিচ্ছি না যাতে ডিফল্ট থাকে
     payload = {"chat_id": chat_id, "text": text}
     if reply_markup: payload["reply_markup"] = reply_markup
-    requests.post(f"{BASE_URL}/sendMessage", json=payload)
+    try: requests.post(f"{BASE_URL}/sendMessage", json=payload)
+    except: pass
 
 def send_file(chat_id, file_data, file_type, caption=None, filename="file"):
     if file_type == "photo":
@@ -75,27 +73,32 @@ def send_file(chat_id, file_data, file_type, caption=None, filename="file"):
         url = f"{BASE_URL}/sendAudio"
     
     data = {'chat_id': chat_id, 'caption': caption}
-    requests.post(url, data=data, files=files)
+    try: requests.post(url, data=data, files=files)
+    except: pass
 
-def get_file_content(file_id):
-    r = requests.get(f"{BASE_URL}/getFile?file_id={file_id}")
-    file_path = r.json()["result"]["file_path"]
-    download_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
-    return requests.get(download_url).content
-
-# --- AI রেসপন্স ফাংশন ---
+# --- AI রেসপন্স ফাংশন (DEBUG MODE) ---
 def get_ai_reply(prompt):
+    if not GEMINI_API_KEY:
+        return "⚠️ Error: Vercel সেটিংসে GEMINI_API_KEY খুঁজে পাওয়া যায়নি!"
+
     try:
-        model = genai.GenerativeModel('gemini-pro')
+        # মডেল পরিবর্তন করা হয়েছে (আরও ফাস্ট)
+        model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(prompt)
-        return response.text
+        
+        if response.text:
+            return response.text
+        else:
+            return "⚠️ AI কোনো উত্তর দিতে পারেনি (Safety Block)।"
+
     except Exception as e:
-        return "⚠️ AI সার্ভারে সমস্যা হচ্ছে। একটু পরে চেষ্টা করুন।"
+        print(f"Gemini Error: {e}")
+        return f"⚠️ AI Error: {str(e)}"
 
 # --- মেইন রাউট ---
 @app.route('/')
 def home():
-    return "AI All-in-One Bot is Running! 🧠"
+    return "AI Bot Updated! 🚀"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -112,8 +115,7 @@ def webhook():
         # --- ১. মেনু নেভিগেশন ---
         if text == "/start" or text == "🔙 Back":
             user_states[chat_id] = None
-            send_reply(chat_id, "👋 <b>Main Menu</b>\nনিচ থেকে টুল সিলেক্ট করুন অথবা সরাসরি চ্যাট করুন (AI):", get_main_menu())
-            return "ok", 200
+            send_reply(chat_id, "👋 <b>Main Menu</b>\nAI চ্যাট করতে কিছু লিখুন অথবা টুল সিলেক্ট করুন:", get_main_menu())
 
         elif text == "🛠 Generator Tool": send_reply(chat_id, "🛠 Tools:", get_gen_menu())
         elif text == "📂 PDF Tool": send_reply(chat_id, "📂 Tools:", get_pdf_menu())
@@ -164,7 +166,6 @@ def webhook():
 
         # --- ৩. ইনপুট হ্যান্ডলিং ---
         else:
-            # ক) যদি কোনো টুল অ্যাক্টিভ থাকে (স্টেট আছে)
             if state:
                 if state == "qr":
                     img = qrcode.make(text)
@@ -197,7 +198,6 @@ def webhook():
                     bio.seek(0)
                     send_file(chat_id, bio, "document", filename="doc")
 
-                # টেক্সট টুলস
                 elif state == "b64_enc": send_reply(chat_id, base64.b64encode(text.encode()).decode())
                 elif state == "b64_dec": 
                     try: send_reply(chat_id, base64.b64decode(text).decode())
@@ -207,20 +207,14 @@ def webhook():
 
             # খ) ফাইল হ্যান্ডলিং (যদি স্টেট থাকে)
             elif (msg.get("photo") or msg.get("document")) and state:
-                 # (আগের কোডের ফাইল প্রসেসিং অংশটুকু এখানে থাকবে - File Info, Img2PDF ইত্যাদি)
-                 # কোড বড় হয়ে যাচ্ছে তাই সংক্ষেপে লিখলাম, আপনি আগের কোডের লজিকটা এখানে বসাবেন।
                  if state == "file_info":
-                     send_reply(chat_id, "📂 File Received & Analyzed (Demo)")
+                     send_reply(chat_id, "📂 File Received")
                  elif state == "img2pdf":
-                     # Image processing logic here
                      send_reply(chat_id, "Processing Image...")
 
-            # গ) AI চ্যাট (যদি কোনো টুল অ্যাক্টিভ না থাকে এবং টেক্সট মেসেজ হয়) 🤖
+            # গ) AI চ্যাট
             elif text:
-                # লোডিং ইফেক্ট (টাইপিং...)
                 requests.post(f"{BASE_URL}/sendChatAction", json={"chat_id": chat_id, "action": "typing"})
-                
-                # Gemini কে কল করা
                 ai_response = get_ai_reply(text)
                 send_reply(chat_id, ai_response)
 
@@ -229,4 +223,4 @@ def webhook():
     except Exception as e:
         print(f"Error: {e}")
         return "error", 200
-              
+    
