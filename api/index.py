@@ -22,20 +22,21 @@ MAIL_API_URL = "https://api.mail.tm"
 # ইউজার স্টেট (মেমোরি)
 user_states = {}
 
-# --- ১. মেনু বাটন (আপডেট করা হয়েছে - ইনফো বাটন রিমুভড) ---
+# --- ১. মেনু বাটন (Updated) ---
 def get_main_menu():
     return json.dumps({
         "keyboard": [
             [{"text": "📧 Temp Mail"}, {"text": "🛠 Generator Tool"}],
             [{"text": "📂 PDF Tool"}, {"text": "🗣 Voice Tool"}],
             [{"text": "🖼 Image Tool"}, {"text": "📝 Text Tool"}]
-            # Telegram Info এবং File Info বাটন সরিয়ে দেওয়া হয়েছে
+            # Info বাটন সরানো হয়েছে, এখন এটি অটো কাজ করবে
         ],
         "resize_keyboard": True,
         "one_time_keyboard": False
     })
 
 # সাব-মেনু
+def get_temp_mail_menu(): return json.dumps({"keyboard": [[{"text": "📧 New Mail"}], [{"text": "🔙 Back"}]], "resize_keyboard": True})
 def get_gen_menu(): return json.dumps({"keyboard": [[{"text": "🟦 QR Code"}, {"text": "🔑 Password Gen"}], [{"text": "🔗 Link Shortener"}, {"text": "🔙 Back"}]], "resize_keyboard": True})
 def get_pdf_menu(): return json.dumps({"keyboard": [[{"text": "🖼 Img to PDF"}, {"text": "📄 Text to PDF"}], [{"text": "🔙 Back"}]], "resize_keyboard": True})
 def get_voice_menu(): return json.dumps({"keyboard": [[{"text": "🗣 Text to Voice"}, {"text": "🔙 Back"}]], "resize_keyboard": True})
@@ -65,13 +66,22 @@ def get_file_content(file_id):
     file_path = r.json()["result"]["file_path"]
     return requests.get(f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}").content
 
-# সাইজ ফরম্যাট করা (KB/MB)
 def format_size(size):
-    if size < 1024: return f"{size} B"
-    elif size < 1024*1024: return f"{round(size/1024, 2)} KB"
-    else: return f"{round(size/(1024*1024), 2)} MB"
+    # বাইট থেকে MB/KB কনভার্টার
+    power = 2**10
+    n = 0
+    power_labels = {0 : '', 1: 'KB', 2: 'MB', 3: 'GB'}
+    while size > power:
+        size /= power
+        n += 1
+    return f"{round(size, 2)} {power_labels[n]}"
 
-# --- ৩. Temp Mail ফাংশন ---
+def format_duration(seconds):
+    # সেকেন্ড থেকে মিনিট:সেকেন্ড
+    m, s = divmod(seconds, 60)
+    return f"{m:02d}:{s:02d}"
+
+# --- ৩. Temp Mail API ---
 def create_mail_account():
     try:
         domain = requests.get(f"{MAIL_API_URL}/domains").json()['hydra:member'][0]['domain']
@@ -102,98 +112,105 @@ def read_mail(msg_id, token):
 
 # --- মেইন রাউট ---
 @app.route('/')
-def home(): return "All-in-One Bot (Pro Info) Running! 🚀"
+def home(): return "Advanced Info & Tools Bot Running! 🚀"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
         data = request.get_json(force=True)
         
-        # --- CALLBACK QUERY (Temp Mail) ---
+        # --- CALLBACK QUERY (Temp Mail Check) ---
         if "callback_query" in data:
             call = data["callback_query"]
             chat_id = call["message"]["chat"]["id"]
             data_text = call["data"]
             parts = data_text.split("|")
+            action, address, password = parts[0], parts[1], parts[2]
             
-            if len(parts) >= 3:
-                action, address, password = parts[0], parts[1], parts[2]
-                token = get_mail_token(address, password)
-                
-                if not token:
-                    requests.post(f"{BASE_URL}/answerCallbackQuery", json={"callback_query_id": call["id"], "text": "❌ মেয়াদ শেষ।", "show_alert": True})
-                    return "ok", 200
+            token = get_mail_token(address, password)
+            if not token:
+                requests.post(f"{BASE_URL}/answerCallbackQuery", json={"callback_query_id": call["id"], "text": "❌ মেয়াদ শেষ।", "show_alert": True})
+                return "ok", 200
 
-                if action == "check":
-                    msgs = get_mails(token)
-                    if not msgs:
-                        requests.post(f"{BASE_URL}/answerCallbackQuery", json={"callback_query_id": call["id"], "text": "📭 ইনবক্স খালি!", "show_alert": True})
-                    else:
-                        text = f"📬 <b>Inbox:</b> {address}\n\n"
-                        kb = {"inline_keyboard": []}
-                        for m in msgs[:5]:
-                            sub = m.get('subject', '(No Subject)')
-                            kb["inline_keyboard"].append([{"text": f"📖 {sub[:15]}..", "callback_data": f"read|{address}|{password}|{m['id']}"}])
-                        kb["inline_keyboard"].append([{"text": "🔄 Refresh", "callback_data": f"check|{address}|{password}"}])
-                        send_reply(chat_id, text, kb)
-                
-                elif action == "read":
-                    msg_id = parts[3]
-                    full = read_mail(msg_id, token)
-                    if full:
-                        body = full.get('text', 'No text')[:3000]
-                        view = f"📩 <b>From:</b> {full['from']['address']}\n<b>Sub:</b> {full.get('subject')}\n\n{body}"
-                        kb = {"inline_keyboard": [[{"text": "🔙 Back", "callback_data": f"check|{address}|{password}"}]]}
-                        send_reply(chat_id, view, kb)
+            if action == "check":
+                msgs = get_mails(token)
+                if not msgs:
+                    requests.post(f"{BASE_URL}/answerCallbackQuery", json={"callback_query_id": call["id"], "text": "📭 ইনবক্স খালি!", "show_alert": True})
+                else:
+                    text = f"📬 <b>Inbox:</b> {address}\n\n"
+                    kb = {"inline_keyboard": []}
+                    for m in msgs[:5]:
+                        sub = m.get('subject', '(No Subject)')
+                        kb["inline_keyboard"].append([{"text": f"📖 {sub[:15]}..", "callback_data": f"read|{address}|{password}|{m['id']}"}])
+                    kb["inline_keyboard"].append([{"text": "🔄 Refresh", "callback_data": f"check|{address}|{password}"}])
+                    send_reply(chat_id, text, kb)
+            
+            elif action == "read":
+                msg_id = parts[3]
+                full = read_mail(msg_id, token)
+                if full:
+                    body = full.get('text', 'No text')[:3000]
+                    view = f"📩 <b>From:</b> {full['from']['address']}\n<b>Sub:</b> {full.get('subject')}\n\n{body}"
+                    kb = {"inline_keyboard": [[{"text": "🔙 Back", "callback_data": f"check|{address}|{password}"}]]}
+                    send_reply(chat_id, view, kb)
 
             requests.post(f"{BASE_URL}/answerCallbackQuery", json={"callback_query_id": call["id"]})
             return "ok", 200
 
-        # --- TEXT MESSAGES ---
+        # --- TEXT MESSAGES & FILES ---
         if "message" in data:
             msg = data["message"]
             chat_id = msg["chat"]["id"]
             text = msg.get("text", "")
-            user = msg.get("from", {})
             
             state = user_states.get(chat_id, None)
 
-            # --- ১. START COMMAND (YOUR PROFILE) ---
-            if text == "/start" or text == "🔙 Back":
+            # --- ১. মেনু নেভিগেশন ---
+            
+            # START MESSAGE (Custom Design)
+            if text == "/start":
                 user_states[chat_id] = None
+                u = msg.get("from", {})
+                fname = u.get("first_name", "")
+                lname = u.get("last_name", "")
+                full_name = f"{fname} {lname}".strip()
+                username = f"@{u.get('username')}" if u.get('username') else "N/A"
                 
-                # নামের লজিক
-                full_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
-                username = f"@{user.get('username')}" if user.get("username") else "N/A"
-                
-                profile_msg = (
-                    f"👋 হ্যালো <b>{user.get('first_name')}</b>!\n\n"
+                start_msg = (
+                    f"👋 হ্যালো <b>{fname}</b>!\n\n"
                     "আমি একটি অ্যাডভান্সড ইনফো বট।\n"
                     "আমার কাজ হলো যেকোনো চ্যাট, ইউজার বা চ্যানেলের গোপন তথ্য বের করা।\n\n"
                     "👤 <b>YOUR PROFILE:</b>\n\n"
-                    f"🆔 <b>ID:</b> <code>{user.get('id')}</code>\n"
+                    f"🆔 <b>ID:</b> <code>{u.get('id')}</code>\n"
                     f"📛 <b>Name:</b> {full_name}\n"
                     f"🔗 <b>Username:</b> {username}"
                 )
-                send_reply(chat_id, profile_msg, get_main_menu())
+                send_reply(chat_id, start_msg, get_main_menu())
 
-            # --- Temp Mail ---
+            elif text == "🔙 Back":
+                user_states[chat_id] = None
+                send_reply(chat_id, "👋 <b>Main Menu</b>", get_main_menu())
+
+            # --- Temp Mail Menu ---
             elif text == "📧 Temp Mail":
+                send_reply(chat_id, "📧 <b>Temp Mail System</b>\nনতুন মেইল তৈরি করতে নিচের বাটনে চাপুন:", get_temp_mail_menu())
+
+            elif text == "📧 New Mail":
                 addr, pwd = create_mail_account()
                 if addr:
-                    res = f"✅ <b>Temp Mail Generated!</b>\n\n📧 <code>{addr}</code>\n\n(ইনবক্স চেক করতে নিচের বাটনে চাপুন)"
+                    res = f"✅ <b>Temp Mail Created!</b>\n\n📧 <code>{addr}</code>\n\n(ইনবক্স চেক করতে নিচের বাটনে চাপুন)"
                     kb = {"inline_keyboard": [[{"text": "📩 Check Inbox", "callback_data": f"check|{addr}|{pwd}"}]]}
                     send_reply(chat_id, res, kb)
-                else: send_reply(chat_id, "⚠️ মেইল সার্ভার এরর।")
+                else: send_reply(chat_id, "⚠️ Server Error.")
 
-            # --- টুলস মেনু ---
+            # --- অন্যান্য টুল মেনু ---
             elif text == "🛠 Generator Tool": send_reply(chat_id, "🛠 Tools:", get_gen_menu())
             elif text == "📂 PDF Tool": send_reply(chat_id, "📂 Tools:", get_pdf_menu())
             elif text == "🗣 Voice Tool": send_reply(chat_id, "🗣 Tools:", get_voice_menu())
             elif text == "🖼 Image Tool": send_reply(chat_id, "🖼 Tools:", get_image_menu())
             elif text == "📝 Text Tool": send_reply(chat_id, "📝 Tools:", get_text_menu())
-
-            # --- টুল অ্যাক্টিভেশন ---
+            
+            # --- ২. টুল অ্যাক্টিভেশন (States) ---
             elif text == "🟦 QR Code":
                 user_states[chat_id] = "qr"
                 send_reply(chat_id, "👉 টেক্সট দিন:")
@@ -206,18 +223,6 @@ def webhook():
             elif text == "🗣 Text to Voice":
                 user_states[chat_id] = "tts"
                 send_reply(chat_id, "👉 ইংরেজি টেক্সট দিন:")
-            elif text == "🔐 Base64 Enc":
-                user_states[chat_id] = "b64_enc"
-                send_reply(chat_id, "👉 টেক্সট দিন:")
-            elif text == "🔓 Base64 Dec":
-                user_states[chat_id] = "b64_dec"
-                send_reply(chat_id, "👉 কোড দিন:")
-            elif text == "#️⃣ MD5 Hash":
-                user_states[chat_id] = "hash"
-                send_reply(chat_id, "👉 টেক্সট দিন:")
-            elif text == "🔠 Uppercase":
-                user_states[chat_id] = "upper"
-                send_reply(chat_id, "👉 টেক্সট দিন:")
             elif text == "🖼 Img to PDF":
                 user_states[chat_id] = "img2pdf"
                 send_reply(chat_id, "👉 ছবি পাঠান:")
@@ -230,45 +235,58 @@ def webhook():
             elif text == "📐 Resize (50%)":
                 user_states[chat_id] = "resize"
                 send_reply(chat_id, "👉 ছবি পাঠান:")
-
-            # --- ৩. মেইন লজিক (Info & Tools) ---
+            elif text == "🔐 Base64 Enc":
+                user_states[chat_id] = "b64_enc"
+                send_reply(chat_id, "👉 টেক্সট দিন:")
+            elif text == "🔓 Base64 Dec":
+                user_states[chat_id] = "b64_dec"
+                send_reply(chat_id, "👉 কোড দিন:")
+            elif text == "#️⃣ MD5 Hash":
+                user_states[chat_id] = "hash"
+                send_reply(chat_id, "👉 টেক্সট দিন:")
+            elif text == "🔠 Uppercase":
+                user_states[chat_id] = "upper"
+                send_reply(chat_id, "👉 টেক্সট দিন:")
+            
+            # --- ৩. ইনপুট হ্যান্ডলিং ও অটো ইনফো ---
             else:
-                # ক) Forwarded Info Logic (Auto Detect)
+                # ক) Forwarded Message (Auto Telegram Info - Custom Format)
                 if "forward_date" in msg:
                     chat = msg.get("forward_from_chat")
-                    f_user = msg.get("forward_from")
+                    user = msg.get("forward_from")
                     
-                    if chat: # Channel
+                    if chat:
                         info = (
                             "📢 <b>CHANNEL SOURCE</b>\n\n"
                             f"🆔 <b>ID:</b> <code>{chat.get('id')}</code>\n"
                             f"📛 <b>Name:</b> {chat.get('title')}\n"
                             f"🔗 <b>Username:</b> @{chat.get('username','None')}"
                         )
-                    elif f_user: # User or Bot
-                        full_name = f"{f_user.get('first_name','')} {f_user.get('last_name','')}".strip()
-                        u_name = f"@{f_user.get('username')}" if f_user.get("username") else "None"
-                        header = "🤖 <b>BOT SOURCE</b>" if f_user.get("is_bot") else "👤 <b>USER SOURCE</b>"
-                        
+                    elif user:
+                        u_type = "🤖 BOT" if user.get("is_bot") else "👤 USER"
+                        fname = user.get("first_name", "")
+                        lname = user.get("last_name", "")
+                        full = f"{fname} {lname}".strip()
                         info = (
-                            f"{header}\n\n"
-                            f"🆔 <b>ID:</b> <code>{f_user.get('id')}</code>\n"
-                            f"📛 <b>Name:</b> {full_name}\n"
-                            f"🔗 <b>Username:</b> {u_name}"
+                            f"{u_type} <b>SOURCE</b>\n\n"
+                            f"🆔 <b>ID:</b> <code>{user.get('id')}</code>\n"
+                            f"📛 <b>Name:</b> {full}\n"
+                            f"🔗 <b>Username:</b> @{user.get('username','None')}"
                         )
-                    else: # Hidden User
+                    else:
                         info = (
                             "🔒 <b>HIDDEN SOURCE</b>\n\n"
                             f"📛 <b>Name:</b> {msg.get('forward_sender_name')}\n"
-                            "⚠️ ID Hidden"
+                            "⚠️ <i>ID Hidden by Privacy</i>"
                         )
                     send_reply(chat_id, info)
 
-                # খ) File Info Logic (Auto Detect)
+                # খ) File Handling (Auto File Info - Custom Format)
                 elif (msg.get("photo") or msg.get("document") or msg.get("video") or msg.get("audio")):
                     
-                    # যদি নির্দিষ্ট টুল (Img2PDF) সিলেক্ট করা থাকে
+                    # যদি নির্দিষ্ট টুল সিলেক্ট করা থাকে (Image Tools)
                     if state == "img2pdf" and "photo" in msg:
+                         # Img2PDF Logic
                          file_id = msg["photo"][-1]["file_id"]
                          img_bytes = get_file_content(file_id)
                          img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
@@ -276,44 +294,78 @@ def webhook():
                          img.save(bio, 'PDF')
                          bio.seek(0)
                          send_file(chat_id, bio, "document", caption="✅ Image to PDF", filename="converted")
+                    
+                    elif state == "grayscale" and "photo" in msg:
+                         # Grayscale Logic
+                         file_id = msg["photo"][-1]["file_id"]
+                         img_bytes = get_file_content(file_id)
+                         img = Image.open(io.BytesIO(img_bytes)).convert('L')
+                         bio = io.BytesIO()
+                         img.save(bio, 'JPEG')
+                         bio.seek(0)
+                         send_file(chat_id, bio, "photo", caption="⚫ Grayscale")
 
-                    # যদি টুল সিলেক্ট না থাকে -> Show File Info
-                    else:
-                        f_type = "Unknown"
-                        f_size = 0
+                    elif state == "resize" and "photo" in msg:
+                         # Resize Logic
+                         file_id = msg["photo"][-1]["file_id"]
+                         img_bytes = get_file_content(file_id)
+                         img = Image.open(io.BytesIO(img_bytes))
+                         w, h = img.size
+                         img = img.resize((int(w/2), int(h/2)))
+                         bio = io.BytesIO()
+                         img.save(bio, 'JPEG')
+                         bio.seek(0)
+                         send_file(chat_id, bio, "photo", caption="📐 Resized 50%")
+
+                    # যদি কোনো টুল সিলেক্ট না থাকে -> Auto File Info
+                    elif not state:
+                        icon = "📁"
+                        type_name = "UNKNOWN"
                         details = ""
                         
-                        if "photo" in msg:
+                        if "document" in msg:
+                            doc = msg["document"]
+                            icon = "📄"
+                            type_name = "DOCUMENT"
+                            details = (
+                                f"📛 <b>Title:</b> {doc.get('file_name', 'No Name')}\n"
+                                f"📦 <b>Size:</b> {format_size(doc['file_size'])}\n"
+                                f"🏷 <b>Mime:</b> {doc.get('mime_type')}"
+                            )
+                        elif "photo" in msg:
                             p = msg['photo'][-1]
-                            f_type = "🖼 Photo"
-                            f_size = p['file_size']
-                            details = f"Resolution: {p['width']}x{p['height']}"
-                        
+                            icon = "🖼"
+                            type_name = "IMAGE"
+                            details = (
+                                f"📦 <b>Size:</b> {format_size(p['file_size'])}\n"
+                                f"📐 <b>Resolution:</b> {p['width']}x{p['height']} px"
+                            )
                         elif "video" in msg:
                             v = msg['video']
-                            f_type = "🎥 Video"
-                            f_size = v['file_size']
-                            details = f"Duration: {v['duration']}s | Res: {v['width']}x{v['height']}"
-                            
+                            icon = "🎥"
+                            type_name = "VIDEO"
+                            details = (
+                                f"📛 <b>Title:</b> {v.get('file_name', 'Video')}\n"
+                                f"📦 <b>Size:</b> {format_size(v['file_size'])}\n"
+                                f"⏱ <b>Duration:</b> {format_duration(v.get('duration', 0))}\n"
+                                f"📐 <b>Resolution:</b> {v['width']}x{v['height']} px"
+                            )
                         elif "audio" in msg:
                             a = msg['audio']
-                            f_type = "🎵 Audio"
-                            f_size = a['file_size']
-                            details = f"Duration: {a['duration']}s"
-                            
-                        elif "document" in msg:
-                            d = msg['document']
-                            f_type = f"📄 {d.get('mime_type').split('/')[-1].upper()}"
-                            f_size = d['file_size']
-                            details = f"Name: {d.get('file_name', 'file')}"
-
-                        info = (
-                            "📂 <b>FILE INFO</b>\n\n"
-                            f"Type: {f_type}\n"
-                            f"Size: {format_size(f_size)}\n"
+                            icon = "🎵"
+                            type_name = "AUDIO"
+                            details = (
+                                f"📛 <b>Title:</b> {a.get('title', 'Unknown')}\n"
+                                f"👤 <b>Artist:</b> {a.get('performer', 'Unknown')}\n"
+                                f"📦 <b>Size:</b> {format_size(a['file_size'])}\n"
+                                f"⏱ <b>Duration:</b> {format_duration(a.get('duration', 0))}"
+                            )
+                        
+                        info_msg = (
+                            f"{icon} <b>{type_name} INFO</b>\n\n"
                             f"{details}"
                         )
-                        send_reply(chat_id, info)
+                        send_reply(chat_id, info_msg)
 
                 # গ) Text Tools Processing
                 elif state and text:
@@ -344,7 +396,6 @@ def webhook():
                         bio.write(pdf.output(dest='S').encode('latin-1'))
                         bio.seek(0)
                         send_file(chat_id, bio, "document", filename="text_doc")
-                    # (Other text tools...)
                     elif state == "b64_enc": send_reply(chat_id, base64.b64encode(text.encode()).decode())
                     elif state == "b64_dec": 
                         try: send_reply(chat_id, base64.b64decode(text).decode())
@@ -357,3 +408,4 @@ def webhook():
     except Exception as e:
         print(f"Error: {e}")
         return "error", 200
+        
